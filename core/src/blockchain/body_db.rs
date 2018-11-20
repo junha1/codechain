@@ -25,7 +25,7 @@ use primitives::{Bytes, H256};
 use rlp::RlpStream;
 use rlp_compress::{blocks_swapper, compress, decompress};
 
-use super::block_info::BlockLocation;
+use super::block_info::BestBlockChanged;
 use super::extras::{ParcelAddress, TransactionAddress};
 use crate::db::{self, CacheUpdatePolicy, Readable, Writable};
 use crate::views::BlockView;
@@ -74,7 +74,7 @@ impl BodyDB {
     /// Inserts the block body into backing cache database.
     /// Expects the body to be valid and already verified.
     /// If the body is already known, does nothing.
-    pub fn insert_body(&self, batch: &mut DBTransaction, block: &BlockView, location: &BlockLocation) {
+    pub fn insert_body(&self, batch: &mut DBTransaction, block: &BlockView, best_block_changed: &BestBlockChanged) {
         let hash = block.hash();
 
         if self.is_known_body(&hash) {
@@ -92,13 +92,13 @@ impl BodyDB {
         batch.extend_with_option_cache(
             db::COL_EXTRA,
             &mut *pending_parcel_addresses,
-            self.new_parcel_address_entries(block, location),
+            self.new_parcel_address_entries(block, best_block_changed),
             CacheUpdatePolicy::Overwrite,
         );
         batch.extend_with_option_cache(
             db::COL_EXTRA,
             &mut *pending_transaction_addresses,
-            self.new_transaction_address_entries(block, location),
+            self.new_transaction_address_entries(block, best_block_changed),
             CacheUpdatePolicy::Overwrite,
         );
     }
@@ -138,13 +138,13 @@ impl BodyDB {
     fn new_parcel_address_entries(
         &self,
         block: &BlockView,
-        location: &BlockLocation,
+        best_block_changed: &BestBlockChanged,
     ) -> HashMap<H256, Option<ParcelAddress>> {
         let parcel_hashes = block.parcel_hashes();
 
-        match location {
-            BlockLocation::CanonChain => parcel_address_entries(block.hash(), parcel_hashes).collect(),
-            BlockLocation::BranchBecomingCanonChain(data) => {
+        match best_block_changed {
+            BestBlockChanged::CanonChainAppended => parcel_address_entries(block.hash(), parcel_hashes).collect(),
+            BestBlockChanged::BranchBecomingCanonChain(data) => {
                 let enacted = data.enacted.iter().flat_map(|hash| {
                     let body = self.block_body(hash).expect("Enacted block must be in database.");
                     let enacted_parcel_hashes = body.parcel_hashes();
@@ -162,23 +162,23 @@ impl BodyDB {
                 // The order here is important! Don't remove parcel if it was part of enacted blocks as well.
                 retracted.chain(enacted).chain(current_addresses).collect()
             }
-            BlockLocation::Branch => HashMap::new(),
+            BestBlockChanged::None => HashMap::new(),
         }
     }
 
     fn new_transaction_address_entries(
         &self,
         block: &BlockView,
-        location: &BlockLocation,
+        best_block_changed: &BestBlockChanged,
     ) -> HashMap<H256, Option<TransactionAddress>> {
         let (removed, added): (
             Box<Iterator<Item = (H256, TransactionAddress)>>,
             Box<Iterator<Item = (H256, TransactionAddress)>>,
-        ) = match location {
-            BlockLocation::CanonChain => {
+        ) = match best_block_changed {
+            BestBlockChanged::CanonChainAppended => {
                 (Box::new(::std::iter::empty()), Box::new(transaction_address_entries(block.hash(), block.parcels())))
             }
-            BlockLocation::BranchBecomingCanonChain(ref data) => {
+            BestBlockChanged::BranchBecomingCanonChain(ref data) => {
                 let enacted = data
                     .enacted
                     .iter()
@@ -195,7 +195,7 @@ impl BodyDB {
 
                 (Box::new(retracted), Box::new(enacted))
             }
-            BlockLocation::Branch => return Default::default(),
+            BestBlockChanged::None => return Default::default(),
         };
 
         let mut added_addresses: HashMap<H256, TransactionAddress> = Default::default();

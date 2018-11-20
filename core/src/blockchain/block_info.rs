@@ -16,13 +16,13 @@
 
 use super::route::TreeRoute;
 
-/// Describes location of newly inserted block.
+/// Describes how best block is changed
 #[derive(Debug, Clone, PartialEq)]
-pub enum BlockLocation {
-    /// It's part of the canon chain.
-    CanonChain,
-    /// It's not a part of the canon chain.
-    Branch,
+pub enum BestBlockChanged {
+    /// Cannonical chain is appended.
+    CanonChainAppended,
+    /// Nothing changed.
+    None,
     /// It's part of the fork which should become canon chain,
     /// because its total score is higher than current
     /// canon chain score.

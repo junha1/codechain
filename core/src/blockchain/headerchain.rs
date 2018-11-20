@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 use primitives::{Bytes, H256};
 use rlp_compress::{blocks_swapper, compress, decompress};
 
-use super::block_info::BlockLocation;
+use super::block_info::BestBlockChanged;
 use super::extras::BlockDetails;
 use super::route::tree_route;
 use crate::db::{self, CacheUpdatePolicy, Readable, Writable};
@@ -102,7 +102,7 @@ impl HeaderChain {
     /// Expects the header to be valid and already verified.
     /// If the header is already known, does nothing.
     // FIXME: Find better return type. Returning `None` at duplication is not natural
-    pub fn insert_header(&self, batch: &mut DBTransaction, header: &HeaderView) -> Option<BlockLocation> {
+    pub fn insert_header(&self, batch: &mut DBTransaction, header: &HeaderView) -> Option<BestBlockChanged> {
         let hash = header.hash();
 
         if self.is_known_header(&hash) {
@@ -115,13 +115,13 @@ impl HeaderChain {
         let compressed_header = compress(header.rlp().as_raw(), blocks_swapper());
         batch.put(db::COL_HEADERS, &hash, &compressed_header);
 
-        let location = self.block_location(header);
+        let best_block_changed = self.best_block_changed(header);
 
-        let new_hashes = self.new_hash_entries(header, &location);
+        let new_hashes = self.new_hash_entries(header, &best_block_changed);
         let new_details = self.new_detail_entries(header);
 
         let mut pending_best_header_hash = self.pending_best_header_hash.write();
-        if location != BlockLocation::Branch {
+        if best_block_changed != BestBlockChanged::None {
             batch.put(db::COL_EXTRA, BEST_HEADER_KEY, &header.hash());
             *pending_best_header_hash = Some(header.hash());
         }
@@ -132,7 +132,7 @@ impl HeaderChain {
         batch.extend_with_cache(db::COL_EXTRA, &mut *pending_details, new_details, CacheUpdatePolicy::Overwrite);
         batch.extend_with_cache(db::COL_EXTRA, &mut *pending_hashes, new_hashes, CacheUpdatePolicy::Overwrite);
 
-        Some(location)
+        Some(best_block_changed)
     }
 
     /// Apply pending insertion updates
@@ -154,16 +154,20 @@ impl HeaderChain {
     }
 
     /// This function returns modified block hashes.
-    fn new_hash_entries(&self, header: &HeaderView, location: &BlockLocation) -> HashMap<BlockNumber, H256> {
+    fn new_hash_entries(
+        &self,
+        header: &HeaderView,
+        best_block_changed: &BestBlockChanged,
+    ) -> HashMap<BlockNumber, H256> {
         let mut hashes = HashMap::new();
         let number = header.number();
 
-        match location {
-            BlockLocation::Branch => (),
-            BlockLocation::CanonChain => {
+        match best_block_changed {
+            BestBlockChanged::None => (),
+            BestBlockChanged::CanonChainAppended => {
                 hashes.insert(number, header.hash());
             }
-            BlockLocation::BranchBecomingCanonChain(data) => {
+            BestBlockChanged::BranchBecomingCanonChain(data) => {
                 let ancestor_number = self.block_number(&data.ancestor).expect("Ancestor always exist in DB");
                 let start_number = ancestor_number + 1;
 
@@ -201,8 +205,8 @@ impl HeaderChain {
         block_details
     }
 
-    /// Calculate insert location for new block
-    fn block_location(&self, header: &HeaderView) -> BlockLocation {
+    /// Calculate how best block is changed
+    fn best_block_changed(&self, header: &HeaderView) -> BestBlockChanged {
         let parent_hash = header.parent_hash();
         let parent_details = self.block_details(&parent_hash).expect("Invalid parent hash");
         let is_new_best = parent_details.total_score + header.score() > self.best_header_detail().total_score;
@@ -216,11 +220,11 @@ impl HeaderChain {
                 .expect("blocks being imported always within recent history; qed");
 
             match route.retracted.len() {
-                0 => BlockLocation::CanonChain,
-                _ => BlockLocation::BranchBecomingCanonChain(route),
+                0 => BestBlockChanged::CanonChainAppended,
+                _ => BestBlockChanged::BranchBecomingCanonChain(route),
             }
         } else {
-            BlockLocation::Branch
+            BestBlockChanged::None
         }
     }
 

@@ -26,7 +26,7 @@ use parking_lot::RwLock;
 use primitives::H256;
 use rlp::RlpStream;
 
-use super::block_info::BlockLocation;
+use super::block_info::BestBlockChanged;
 use super::body_db::{BodyDB, BodyProvider};
 use super::extras::{BlockDetails, EpochTransitions, ParcelAddress, TransactionAddress, EPOCH_KEY_PREFIX};
 use super::headerchain::{HeaderChain, HeaderProvider};
@@ -109,19 +109,19 @@ impl BlockChain {
 
         assert!(self.pending_best_block_hash.read().is_none());
 
-        let location = self.block_location(&block);
+        let best_block_changed = self.best_block_changed(&block);
 
         self.headerchain.insert_header(batch, &header);
-        self.body_db.insert_body(batch, &block, &location);
+        self.body_db.insert_body(batch, &block, &best_block_changed);
         self.invoice_db.insert_invoice(batch, &hash, invoices);
 
-        if location != BlockLocation::Branch {
+        if best_block_changed != BestBlockChanged::None {
             let mut pending_best_block_hash = self.pending_best_block_hash.write();
             batch.put(db::COL_EXTRA, BEST_BLOCK_KEY, &hash);
             *pending_best_block_hash = Some(hash);
         }
 
-        ImportRoute::new(hash, &location)
+        ImportRoute::new(hash, &best_block_changed)
     }
 
     /// Apply pending insertion updates
@@ -138,8 +138,8 @@ impl BlockChain {
         }
     }
 
-    /// Calculate insert location for new block
-    fn block_location(&self, block: &BlockView) -> BlockLocation {
+    /// Calculate how best block is changed
+    fn best_block_changed(&self, block: &BlockView) -> BestBlockChanged {
         let header = block.header_view();
         let parent_hash = header.parent_hash();
         let parent_details = self.block_details(&parent_hash).expect("Invalid parent hash");
@@ -150,11 +150,11 @@ impl BlockChain {
                 .expect("blocks being imported always within recent history; qed");
 
             match route.retracted.len() {
-                0 => BlockLocation::CanonChain,
-                _ => BlockLocation::BranchBecomingCanonChain(route),
+                0 => BestBlockChanged::CanonChainAppended,
+                _ => BestBlockChanged::BranchBecomingCanonChain(route),
             }
         } else {
-            BlockLocation::Branch
+            BestBlockChanged::None
         }
     }
 

@@ -16,7 +16,7 @@
 
 use primitives::H256;
 
-use super::block_info::BlockLocation;
+use super::block_info::BestBlockChanged;
 use super::headerchain::HeaderProvider;
 
 /// Represents a tree route between `from` block and `to` block:
@@ -120,19 +120,19 @@ pub struct ImportRoute {
 }
 
 impl ImportRoute {
-    pub fn new(hash: H256, location: &BlockLocation) -> Self {
-        match location {
-            BlockLocation::CanonChain => ImportRoute {
+    pub fn new(hash: H256, best_block_changed: &BestBlockChanged) -> Self {
+        match best_block_changed {
+            BestBlockChanged::CanonChainAppended => ImportRoute {
                 retracted: vec![],
                 enacted: vec![hash],
                 omitted: vec![],
             },
-            BlockLocation::Branch => ImportRoute {
+            BestBlockChanged::None => ImportRoute {
                 retracted: vec![],
                 enacted: vec![],
                 omitted: vec![hash],
             },
-            BlockLocation::BranchBecomingCanonChain(data) => {
+            BestBlockChanged::BranchBecomingCanonChain(data) => {
                 let mut enacted = vec![hash];
                 enacted.extend(data.enacted.iter());
                 let retracted = data.retracted.clone();
