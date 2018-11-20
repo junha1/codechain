@@ -112,7 +112,8 @@ impl BlockChain {
         let best_block_changed = self.best_block_changed(&block);
 
         self.headerchain.insert_header(batch, &header);
-        self.body_db.insert_body(batch, &block, &best_block_changed);
+        self.body_db.insert_body(batch, &block);
+        self.body_db.update_best_block(batch, &best_block_changed);
         self.invoice_db.insert_invoice(batch, &hash, invoices);
 
         if best_block_changed != BestBlockChanged::None {
@@ -150,8 +151,13 @@ impl BlockChain {
                 .expect("blocks being imported always within recent history; qed");
 
             match route.retracted.len() {
-                0 => BestBlockChanged::CanonChainAppended,
-                _ => BestBlockChanged::BranchBecomingCanonChain(route),
+                0 => BestBlockChanged::CanonChainAppended {
+                    new_best_hash: header.hash(),
+                },
+                _ => BestBlockChanged::BranchBecomingCanonChain {
+                    tree_route: route,
+                    new_best_hash: header.hash(),
+                },
             }
         } else {
             BestBlockChanged::None

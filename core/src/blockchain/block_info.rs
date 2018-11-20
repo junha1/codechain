@@ -14,17 +14,40 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::option::Option;
+
 use super::route::TreeRoute;
+use primitives::H256;
 
 /// Describes how best block is changed
 #[derive(Debug, Clone, PartialEq)]
 pub enum BestBlockChanged {
     /// Cannonical chain is appended.
-    CanonChainAppended,
+    CanonChainAppended {
+        new_best_hash: H256,
+    },
     /// Nothing changed.
     None,
     /// It's part of the fork which should become canon chain,
     /// because its total score is higher than current
     /// canon chain score.
-    BranchBecomingCanonChain(TreeRoute),
+    BranchBecomingCanonChain {
+        new_best_hash: H256,
+        tree_route: TreeRoute,
+    },
+}
+
+impl BestBlockChanged {
+    pub fn new_best_hash(&self) -> Option<H256> {
+        match self {
+            BestBlockChanged::CanonChainAppended {
+                new_best_hash,
+            } => Some(*new_best_hash),
+            BestBlockChanged::BranchBecomingCanonChain {
+                new_best_hash,
+                ..
+            } => Some(*new_best_hash),
+            BestBlockChanged::None => None,
+        }
+    }
 }

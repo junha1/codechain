@@ -117,12 +117,12 @@ impl HeaderChain {
 
         let best_block_changed = self.best_block_changed(header);
 
-        let new_hashes = self.new_hash_entries(header, &best_block_changed);
+        let new_hashes = self.new_hash_entries(&best_block_changed);
         let new_details = self.new_detail_entries(header);
 
         let mut pending_best_header_hash = self.pending_best_header_hash.write();
-        if best_block_changed != BestBlockChanged::None {
-            batch.put(db::COL_EXTRA, BEST_HEADER_KEY, &header.hash());
+        if let Some(best_block_hash) = best_block_changed.new_best_hash() {
+            batch.put(db::COL_EXTRA, BEST_HEADER_KEY, &best_block_hash);
             *pending_best_header_hash = Some(header.hash());
         }
 
@@ -154,24 +154,30 @@ impl HeaderChain {
     }
 
     /// This function returns modified block hashes.
-    fn new_hash_entries(
-        &self,
-        header: &HeaderView,
-        best_block_changed: &BestBlockChanged,
-    ) -> HashMap<BlockNumber, H256> {
+    fn new_hash_entries(&self, best_block_changed: &BestBlockChanged) -> HashMap<BlockNumber, H256> {
+        let header = if let Some(best_block_hash) = best_block_changed.new_best_hash() {
+            self.block_header(&best_block_hash).expect("New best block's header should be imported already")
+        } else {
+            return HashMap::new()
+        };
         let mut hashes = HashMap::new();
         let number = header.number();
 
         match best_block_changed {
             BestBlockChanged::None => (),
-            BestBlockChanged::CanonChainAppended => {
+            BestBlockChanged::CanonChainAppended {
+                ..
+            } => {
                 hashes.insert(number, header.hash());
             }
-            BestBlockChanged::BranchBecomingCanonChain(data) => {
-                let ancestor_number = self.block_number(&data.ancestor).expect("Ancestor always exist in DB");
+            BestBlockChanged::BranchBecomingCanonChain {
+                tree_route,
+                ..
+            } => {
+                let ancestor_number = self.block_number(&tree_route.ancestor).expect("Ancestor always exist in DB");
                 let start_number = ancestor_number + 1;
 
-                for (index, hash) in data.enacted.iter().enumerate() {
+                for (index, hash) in tree_route.enacted.iter().enumerate() {
                     hashes.insert(start_number + index as BlockNumber, *hash);
                 }
 
@@ -220,8 +226,13 @@ impl HeaderChain {
                 .expect("blocks being imported always within recent history; qed");
 
             match route.retracted.len() {
-                0 => BestBlockChanged::CanonChainAppended,
-                _ => BestBlockChanged::BranchBecomingCanonChain(route),
+                0 => BestBlockChanged::CanonChainAppended {
+                    new_best_hash: header.hash(),
+                },
+                _ => BestBlockChanged::BranchBecomingCanonChain {
+                    tree_route: route,
+                    new_best_hash: header.hash(),
+                },
             }
         } else {
             BestBlockChanged::None
