@@ -216,7 +216,7 @@ impl Importer {
         self.check_epoch_end_signal(block.header(), &chain, &mut batch);
 
         block.state().journal_under(&mut batch, number).expect("DB commit failed");
-        let route = chain.insert_block(&mut batch, block_data, invoices.clone());
+        let route = chain.insert_block(&mut batch, block_data, invoices.clone(), self.engine.clone());
 
         // Final commit to the DB
         client.db().write_buffered(batch);

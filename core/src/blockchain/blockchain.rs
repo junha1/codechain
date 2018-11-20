@@ -38,6 +38,7 @@ use crate::db::{self, Readable, Writable};
 use crate::encoded;
 use crate::parcel::LocalizedParcel;
 use crate::views::{BlockView, HeaderView};
+use consensus::CodeChainEngine;
 
 const BEST_BLOCK_KEY: &[u8] = b"best-block";
 
@@ -97,7 +98,13 @@ impl BlockChain {
     /// Inserts the block into backing cache database.
     /// Expects the block to be valid and already verified.
     /// If the block is already known, does nothing.
-    pub fn insert_block(&self, batch: &mut DBTransaction, bytes: &[u8], invoices: Vec<Invoice>) -> ImportRoute {
+    pub fn insert_block(
+        &self,
+        batch: &mut DBTransaction,
+        bytes: &[u8],
+        invoices: Vec<Invoice>,
+        engine: Arc<CodeChainEngine>,
+    ) -> ImportRoute {
         // create views onto rlp
         let block = BlockView::new(bytes);
         let header = block.header_view();
@@ -109,7 +116,7 @@ impl BlockChain {
 
         assert!(self.pending_best_block_hash.read().is_none());
 
-        let best_block_changed = self.best_block_changed(&block);
+        let best_block_changed = self.best_block_changed(&block, engine);
 
         self.headerchain.insert_header(batch, &header);
         self.body_db.insert_body(batch, &block);
@@ -140,7 +147,7 @@ impl BlockChain {
     }
 
     /// Calculate how best block is changed
-    fn best_block_changed(&self, block: &BlockView) -> BestBlockChanged {
+    fn best_block_changed(&self, block: &BlockView, engine: Arc<CodeChainEngine>) -> BestBlockChanged {
         let header = block.header_view();
         let parent_hash = header.parent_hash();
         let parent_details = self.block_details(&parent_hash).expect("Invalid parent hash");
@@ -152,11 +159,11 @@ impl BlockChain {
 
             match route.retracted.len() {
                 0 => BestBlockChanged::CanonChainAppended {
-                    new_best_hash: header.hash(),
+                    new_best_hash: engine.get_best_block_from_highest_score_header(&header),
                 },
                 _ => BestBlockChanged::BranchBecomingCanonChain {
                     tree_route: route,
-                    new_best_hash: header.hash(),
+                    new_best_hash: engine.get_best_block_from_highest_score_header(&header),
                 },
             }
         } else {

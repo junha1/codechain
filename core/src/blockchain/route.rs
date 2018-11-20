@@ -121,30 +121,36 @@ pub struct ImportRoute {
 
 impl ImportRoute {
     pub fn new(new_block_hash: H256, best_block_changed: &BestBlockChanged) -> Self {
+        let mut omitted = Vec::new();
+        let mut enacted = Vec::new();
+        if best_block_changed.new_best_hash() == Some(*&new_block_hash) {
+            enacted.push(new_block_hash);
+        } else {
+            omitted.push(new_block_hash);
+        }
         match best_block_changed {
             BestBlockChanged::CanonChainAppended {
                 ..
             } => ImportRoute {
                 retracted: vec![],
-                enacted: vec![new_block_hash],
-                omitted: vec![],
+                enacted,
+                omitted,
             },
             BestBlockChanged::None => ImportRoute {
                 retracted: vec![],
-                enacted: vec![],
-                omitted: vec![new_block_hash],
+                enacted,
+                omitted,
             },
             BestBlockChanged::BranchBecomingCanonChain {
                 tree_route,
                 ..
             } => {
-                let mut enacted = vec![new_block_hash];
                 enacted.extend(tree_route.enacted.iter());
                 let retracted = tree_route.retracted.clone();
                 ImportRoute {
                     retracted,
                     enacted,
-                    omitted: vec![],
+                    omitted,
                 }
             }
         }

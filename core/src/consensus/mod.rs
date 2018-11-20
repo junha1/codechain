@@ -51,6 +51,7 @@ use crate::error::Error;
 use crate::header::Header;
 use crate::parcel::{SignedParcel, UnverifiedParcel};
 use crate::scheme::CommonParams;
+use crate::views::HeaderView;
 use Client;
 
 /// Seal type.
@@ -238,6 +239,10 @@ pub trait ConsensusEngine<M: Machine>: Sync + Send {
     fn recommended_confirmation(&self) -> u32;
 
     fn register_chain_notify(&self, _: &Client) {}
+
+    fn get_best_block_from_highest_score_header(&self, header: &HeaderView) -> H256 {
+        header.hash()
+    }
 }
 
 /// Results of a query of whether an epoch change occurred at the given block.
