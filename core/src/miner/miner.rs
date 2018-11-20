@@ -552,7 +552,7 @@ impl Miner {
                     .lock()
                     .seal(&*self.engine, seal)
                     .map(|sealed| {
-                        self.engine.broadcast_proposal_block(sealed);
+                        self.engine.broadcast_proposal_block(&sealed);
                         true
                     })
                     .unwrap_or_else(|e| {

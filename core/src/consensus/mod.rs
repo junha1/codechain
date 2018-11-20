@@ -45,7 +45,7 @@ use primitives::{Bytes, H256, U256};
 
 use self::epoch::{EpochVerifier, NoOp, PendingTransition};
 use crate::account_provider::AccountProvider;
-use crate::block::SealedBlock;
+use crate::block::IsBlock;
 use crate::codechain_machine::CodeChainMachine;
 use crate::error::Error;
 use crate::header::Header;
@@ -213,7 +213,7 @@ pub trait ConsensusEngine<M: Machine>: Sync + Send {
     }
 
     /// Broadcast a block proposal.
-    fn broadcast_proposal_block(&self, _block: SealedBlock) {}
+    fn broadcast_proposal_block(&self, _block: &IsBlock) {}
 
     /// Register an account which signs consensus messages.
     fn set_signer(&self, _ap: Arc<AccountProvider>, _address: Address, _password: Option<Password>) {}

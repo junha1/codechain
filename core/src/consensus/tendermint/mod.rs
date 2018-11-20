@@ -757,7 +757,7 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
         true
     }
 
-    fn broadcast_proposal_block(&self, block: SealedBlock) {
+    fn broadcast_proposal_block(&self, block: &IsBlock) {
         self.extension.broadcast_proposal_block(block.rlp_bytes());
     }
 
