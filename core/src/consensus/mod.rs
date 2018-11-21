@@ -213,6 +213,10 @@ pub trait ConsensusEngine<M: Machine>: Sync + Send {
         false
     }
 
+    /// Called when proposal block is verified.
+    /// Consensus many hold the verified proposal block until it should be imported.
+    fn proposal_verified(&self, _verified_block: &M::LiveBlock) {}
+
     /// Broadcast a block proposal.
     fn broadcast_proposal_block(&self, _block: &IsBlock) {}
 

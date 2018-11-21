@@ -102,35 +102,35 @@ pub type Height = usize;
 pub type View = usize;
 pub type BlockHash = H256;
 
-struct ProposalSeal<'a> {
-    view: &'a View,
-    signature: &'a Signature,
+//struct ProposalSeal<'a> {
+//    view: &'a View,
+//    signature: &'a Signature,
+//}
+//
+//impl<'a> ProposalSeal<'a> {
+//    fn new(view: &'a View, signature: &'a Signature) -> Self {
+//        Self {
+//            view,
+//            signature,
+//        }
+//    }
+//
+//    fn seal_fields(&self) -> Vec<Bytes> {
+//        vec![
+//            ::rlp::encode(&*self.view).into_vec(),
+//            ::rlp::encode(&*self.signature).into_vec(),
+//            ::rlp::EMPTY_LIST_RLP.to_vec(),
+//        ]
+//    }
+//}
+
+struct RegularSeal {
+    view: View,
+    signatures: Vec<Signature>,
 }
 
-impl<'a> ProposalSeal<'a> {
-    fn new(view: &'a View, signature: &'a Signature) -> Self {
-        Self {
-            view,
-            signature,
-        }
-    }
-
-    fn seal_fields(&self) -> Vec<Bytes> {
-        vec![
-            ::rlp::encode(&*self.view).into_vec(),
-            ::rlp::encode(&*self.signature).into_vec(),
-            ::rlp::EMPTY_LIST_RLP.to_vec(),
-        ]
-    }
-}
-
-struct RegularSeal<'a> {
-    view: &'a View,
-    signatures: &'a Vec<Signature>,
-}
-
-impl<'a> RegularSeal<'a> {
-    fn new(view: &'a View, signatures: &'a Vec<Signature>) -> Self {
+impl RegularSeal {
+    fn new(view: View, signatures: Vec<Signature>) -> Self {
         Self {
             view,
             signatures,
@@ -140,7 +140,6 @@ impl<'a> RegularSeal<'a> {
     fn seal_fields(&self) -> Vec<Bytes> {
         vec![
             ::rlp::encode(&*self.view).into_vec(),
-            ::rlp::NULL_RLP.to_vec(),
             ::rlp::encode_list(&*self.signatures).into_vec(),
         ]
     }
@@ -165,10 +164,11 @@ pub struct Tendermint {
     last_lock: AtomicUsize,
     /// Bare hash of the proposed block, used for seal submission.
     proposal: RwLock<Option<H256>>,
+    /// Current round's proposal block.
+    proposal_block: RwLock<Option<Bytes>>,
     /// Hash of the proposal parent block.
     proposal_parent: RwLock<H256>,
-    /// Last block proposed by this validator.
-    last_proposed: RwLock<H256>,
+    last_seal: RwLock<Option<RegularSeal>>,
     /// Set used to determine the current validators.
     validators: Box<ValidatorSet>,
     /// Reward per block, in base units.
@@ -196,8 +196,9 @@ impl Tendermint {
             lock_change: RwLock::new(None),
             last_lock: AtomicUsize::new(0),
             proposal: RwLock::new(None),
+            proposal_block: RwLock::new(None),
             proposal_parent: Default::default(),
-            last_proposed: Default::default(),
+            last_seal: RwLock::new(None),
             validators: our_params.validators,
             block_reward: our_params.block_reward,
             extension: Arc::new(extension),
@@ -282,6 +283,7 @@ impl Tendermint {
 
     /// Broadcast all messages since last issued block to get the peers up to speed.
     fn broadcast_old_messages(&self) {
+        /// many need to propagate proposal block
         for m in self
             .votes
             .get_up_to(&VoteStep::new(
@@ -300,6 +302,7 @@ impl Tendermint {
     }
 
     fn update_sealing(&self) {
+        // The name should be chaned may be to "Create Proposal BLock"??
         if let Some(ref weak) = *self.client.read() {
             if let Some(c) = weak.upgrade() {
                 c.update_sealing();
@@ -308,9 +311,25 @@ impl Tendermint {
     }
 
     fn submit_seal(&self, block_hash: H256, seal: Vec<Bytes>) {
+        // We do not need submit_seal anymore
+        // We do not have any sealings anymore
+        assert_eq!(false, true);
         if let Some(ref weak) = *self.client.read() {
             if let Some(c) = weak.upgrade() {
                 c.submit_seal(block_hash, seal);
+            }
+        }
+    }
+
+    fn save_last_seal(&self, seal: RegularSeal) {
+        *self.last_seal.write() = Some(seal);
+    }
+
+    fn import_proposal_block(&self) {
+        if let Some(ref weak) = *self.client.read() {
+            if let Some(c) = weak.upgrade() {
+                let proposal_block = std::mem::replace(self.proposal_block.write(), None);
+                c.import_block(proposal_block);
             }
         }
     }
@@ -339,6 +358,8 @@ impl Tendermint {
         self.view.store(0, AtomicOrdering::SeqCst);
         *self.lock_change.write() = None;
         *self.proposal.write() = None;
+        *self.proposal_parent.write() = Default::default();
+        *self.proposal_block.write() = None;
     }
 
     fn to_step(&self, step: Step) {
@@ -426,15 +447,17 @@ impl Tendermint {
                 }
                 Step::Precommit if self.has_enough_aligned_votes(message) => {
                     let bh = message.block_hash.expect("previous guard ensures is_some; qed");
-                    if *self.last_proposed.read() == bh {
-                        // Commit the block using a complete signature set.
-                        // Generate seal and remove old votes.
-                        let precommits = self.votes.round_signatures(vote_step, &bh);
-                        ctrace!(ENGINE, "Collected seal: {:?}", precommits);
-                        let seal = RegularSeal::new(&vote_step.view, &precommits);
-                        self.submit_seal(bh, seal.seal_fields());
-                        self.votes.throw_out_old(&vote_step);
-                    }
+                    let saved_proposal_hash = self.proposal_block.read().expect("proposal_block != None when step became Prevote").hash();
+                    assert_eq!(saved_proposal_hash, bh);
+                    // Commit the block using a complete signature set.
+                    // Generate seal and remove old votes.
+                    let precommits = self.votes.round_signatures(vote_step, &bh);
+                    ctrace!(ENGINE, "Collected seal: {:?}", precommits);
+                    let seal = RegularSeal::new(vote_step.view, precommits);
+//                    self.submit_seal(bh, seal.seal_fields());
+                    self.save_last_seal(seal);
+                    self.import_proposal_block();
+                    self.votes.throw_out_old(&vote_step);
                     self.to_next_height(self.height.load(AtomicOrdering::SeqCst));
                     Some(Step::Commit)
                 }
@@ -463,7 +486,7 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
 
     /// (consensus view, proposal signature, authority signatures)
     fn seal_fields(&self, _header: &Header) -> usize {
-        3
+        2
     }
 
     /// Should this node participate.
@@ -493,21 +516,25 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
         let view = self.view.load(AtomicOrdering::SeqCst);
         let bh = Some(header.bare_hash());
         let vote_info = message_info_rlp(&VoteStep::new(height, view, Step::Propose), bh.clone());
-        if let Ok(signature) = self.sign(blake256(&vote_info)) {
-            // Insert Propose vote.
-            cdebug!(ENGINE, "Submitting proposal {} at height {} view {}.", header.bare_hash(), height, view);
-            let sender = self.signer.read().address().expect("seals_internally already returned true");
-            self.votes.vote(ConsensusMessage::new(signature, height, view, Step::Propose, bh), sender);
-            // Remember the owned block.
-            *self.last_proposed.write() = header.bare_hash();
-            // Remember proposal for later seal submission.
-            *self.proposal.write() = bh;
-            *self.proposal_parent.write() = header.parent_hash().clone();
-            Seal::Proposal(ProposalSeal::new(&view, &signature).seal_fields())
-        } else {
-            cwarn!(ENGINE, "generate_seal: FAIL: accounts secret key unavailable");
-            Seal::None
+
+        match self.last_seal().read() {
+            Some(seal) => {
+                // Insert Propose vote.
+                cdebug!(ENGINE, "Submitting proposal {} at height {} view {}.", header.bare_hash(), height, view);
+                let sender = self.signer.read().address().expect("seals_internally already returned true");
+                self.votes.vote(ConsensusMessage::new(signature, height, view, Step::Propose, bh), sender);
+                // Remember proposal for later seal submission.
+                *self.proposal.write() = bh;
+                *self.proposal_parent.write() = header.parent_hash().clone();
+                *self.proposal_block.write() = Some(block.rlp_bytes());
+                seal
+            },
+            None => {
+                cwarn!(ENGINE, "generate_seal: FAIL: cannot found previous height's seal");
+                Seal::None
+            }
         }
+        self.last_seal().read().unwrap_or(Seal::None)
     }
 
     fn verify_local_seal(&self, _header: &Header) -> Result<(), Error> {
@@ -518,13 +545,7 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
         let seal_length = header.seal().len();
         let expected_seal_fields = self.seal_fields(header);
         if seal_length == expected_seal_fields {
-            // Either proposal or commit.
-            if (header.seal()[1] == ::rlp::NULL_RLP) != (header.seal()[2] == ::rlp::EMPTY_LIST_RLP) {
-                Ok(())
-            } else {
-                cwarn!(ENGINE, "verify_block_basic: Block is neither a Commit nor Proposal.");
-                Err(BlockError::InvalidSeal.into())
-            }
+            Ok(())
         } else {
             Err(BlockError::InvalidSealArity(Mismatch {
                 expected: expected_seal_fields,
@@ -740,11 +761,17 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
     }
 
     fn is_proposal(&self, header: &Header) -> bool {
-        let signatures_len = header.seal()[2].len();
-        // Signatures have to be an empty list rlp.
-        if signatures_len != 1 {
-            return false
+        match *self.step.read() {
+            Step::Commit => {
+                false
+            }
+            _ => {
+                true
+            }
         }
+    }
+
+    fn proposal_verified(&self, block: &ExecutedBlock) {
         let proposal = ConsensusMessage::new_proposal(header)
             .expect("block went through full verification; this Engine verifies new_proposal creation; qed");
         let proposer = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
@@ -752,9 +779,9 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
         if self.is_view(&proposal) {
             *self.proposal.write() = proposal.block_hash.clone();
             *self.proposal_parent.write() = header.parent_hash().clone();
+            *self.proposal_block.write() = Some(block.rlp_bytes());
         }
         self.votes.vote(proposal, proposer);
-        true
     }
 
     fn broadcast_proposal_block(&self, block: &IsBlock) {
