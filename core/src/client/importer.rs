@@ -113,10 +113,13 @@ impl Importer {
                     invalid_blocks.insert(header.hash());
                     continue
                 }
+                cwarn!(CLIENT, "Before check_ane close {:?}", block.header);
                 if let Ok(closed_block) = self.check_and_close_block(&block, client) {
+                    cwarn!(CLIENT, "After check_ane close {:?}\n{:?}", block.header, closed_block.header());
                     if self.engine.is_proposal(&block.header) {
                         self.block_queue.mark_as_good(&[header.hash()]);
-                        self.engine.broadcast_proposal_block(&closed_block);
+                        self.engine.proposal_verified(closed_block.block());
+                        self.engine.broadcast_proposal_block(closed_block.block());
                     } else {
                         imported_blocks.push(header.hash());
 
@@ -462,7 +465,7 @@ impl Importer {
         let mut batch = DBTransaction::new();
         // FIXME: Check if this line is still necessary.
         // self.check_epoch_end_signal(header, &chain, &mut batch);
-        let route = chain.insert_header(&mut batch, &HeaderView::new(&header.rlp_bytes()));
+        let route = chain.insert_header(&mut batch, &HeaderView::new(&header.rlp_bytes()), Arc::clone(&self.engine));
         client.db().write_buffered(batch);
         chain.commit();
 

@@ -563,14 +563,29 @@ impl Miner {
             // Directly import a regular sealed block.
             Seal::Regular(seal) => {
                 *self.next_mandatory_reseal.write() = Instant::now() + self.options.reseal_max_period;
-                block
-                    .lock()
-                    .seal(&*self.engine, seal)
-                    .map(|sealed| chain.import_sealed_block(sealed).is_ok())
-                    .unwrap_or_else(|e| {
-                        cwarn!(MINER, "ERROR: seal failed when given internally generated seal: {}", e);
-                        false
-                    })
+                if self.engine.is_proposal(block.header()) {
+                    block
+                        .lock()
+                        .seal(&*self.engine, seal.clone())
+                        .map(|sealed| {
+                            cwarn!(MINER, "Proposal seal {:#?} block {:?}", seal, sealed.header());
+                            self.engine.broadcast_proposal_block(&sealed);
+                            true
+                        })
+                        .unwrap_or_else(|e| {
+                            cwarn!(MINER, "ERROR: seal failed when given internally generated seal: {}", e);
+                            false
+                        })
+                } else {
+                    block
+                        .lock()
+                        .seal(&*self.engine, seal)
+                        .map(|sealed| chain.import_sealed_block(sealed).is_ok())
+                        .unwrap_or_else(|e| {
+                            cwarn!(MINER, "ERROR: seal failed when given internally generated seal: {}", e);
+                            false
+                        })
+                }
             }
             Seal::None => {
                 ctrace!(MINER, "No seal is generated.");

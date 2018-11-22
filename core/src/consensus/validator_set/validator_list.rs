@@ -74,6 +74,10 @@ impl ValidatorSet for ValidatorList {
             panic!("Cannot operate with an empty validator set.");
         }
 
+        for v in &self.validators {
+            cwarn!(ENGINE, "Validators {}", v);
+        }
+
         self.validators.get(nonce % validator_n).expect("There are validator_n authorities; taking number modulo validator_n gives number in validator_n range; qed").clone()
     }
 

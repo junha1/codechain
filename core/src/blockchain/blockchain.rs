@@ -32,13 +32,13 @@ use super::extras::{BlockDetails, EpochTransitions, ParcelAddress, TransactionAd
 use super::headerchain::{HeaderChain, HeaderProvider};
 use super::invoice_db::{InvoiceDB, InvoiceProvider};
 use super::route::{tree_route, ImportRoute};
+use consensus::CodeChainEngine;
 use crate::blockchain_info::BlockChainInfo;
 use crate::consensus::epoch::{PendingTransition as PendingEpochTransition, Transition as EpochTransition};
 use crate::db::{self, Readable, Writable};
 use crate::encoded;
 use crate::parcel::LocalizedParcel;
 use crate::views::{BlockView, HeaderView};
-use consensus::CodeChainEngine;
 
 const BEST_BLOCK_KEY: &[u8] = b"best-block";
 
@@ -88,9 +88,14 @@ impl BlockChain {
         }
     }
 
-    pub fn insert_header(&self, batch: &mut DBTransaction, header: &HeaderView) -> ImportRoute {
-        match self.headerchain.insert_header(batch, header) {
-            Some(l) => ImportRoute::new(header.hash(), &l),
+    pub fn insert_header(
+        &self,
+        batch: &mut DBTransaction,
+        header: &HeaderView,
+        engine: Arc<CodeChainEngine>,
+    ) -> ImportRoute {
+        match self.headerchain.insert_header(batch, header, engine) {
+            Some(l) => ImportRoute::new_from_best_hash_changed(header.hash(), &l),
             None => ImportRoute::none(),
         }
     }
@@ -116,9 +121,9 @@ impl BlockChain {
 
         assert!(self.pending_best_block_hash.read().is_none());
 
-        let best_block_changed = self.best_block_changed(&block, engine);
+        let best_block_changed = self.best_block_changed(&block, engine.clone());
 
-        self.headerchain.insert_header(batch, &header);
+        self.headerchain.insert_header(batch, &header, engine.clone());
         self.body_db.insert_body(batch, &block);
         self.body_db.update_best_block(batch, &best_block_changed);
         self.invoice_db.insert_invoice(batch, &hash, invoices);
@@ -157,13 +162,23 @@ impl BlockChain {
             let route = tree_route(self, best_hash, parent_hash)
                 .expect("blocks being imported always within recent history; qed");
 
+            let best_block_hash = engine.get_best_block_from_highest_score_header(&header);
+            let best_block = if best_block_hash != best_hash {
+                self.block(&best_block_hash)
+                    .expect("Best block is already imported block as a branch")
+                    .rlp()
+                    .as_raw()
+                    .to_vec()
+            } else {
+                block.rlp().as_raw().to_vec()
+            };
             match route.retracted.len() {
                 0 => BestBlockChanged::CanonChainAppended {
-                    new_best_hash: engine.get_best_block_from_highest_score_header(&header),
+                    best_block,
                 },
                 _ => BestBlockChanged::BranchBecomingCanonChain {
                     tree_route: route,
-                    new_best_hash: engine.get_best_block_from_highest_score_header(&header),
+                    best_block,
                 },
             }
         } else {

@@ -48,6 +48,7 @@ use crate::codechain_machine::CodeChainMachine;
 use crate::consensus::EngineType;
 use crate::error::{BlockError, Error};
 use crate::header::Header;
+use crate::views::HeaderView;
 use ChainNotify;
 
 /// Timer token representing the consensus step timeouts.
@@ -102,46 +103,40 @@ pub type Height = usize;
 pub type View = usize;
 pub type BlockHash = H256;
 
-//struct ProposalSeal<'a> {
-//    view: &'a View,
-//    signature: &'a Signature,
-//}
-//
-//impl<'a> ProposalSeal<'a> {
-//    fn new(view: &'a View, signature: &'a Signature) -> Self {
-//        Self {
-//            view,
-//            signature,
-//        }
-//    }
-//
-//    fn seal_fields(&self) -> Vec<Bytes> {
-//        vec![
-//            ::rlp::encode(&*self.view).into_vec(),
-//            ::rlp::encode(&*self.signature).into_vec(),
-//            ::rlp::EMPTY_LIST_RLP.to_vec(),
-//        ]
-//    }
-//}
-
-struct RegularSeal {
-    view: View,
-    signatures: Vec<Signature>,
+enum LastBlockSeal {
+    Regular {
+        view: View,
+        signatures: Vec<Signature>,
+    },
+    First {
+        view: View,
+    },
 }
 
-impl RegularSeal {
-    fn new(view: View, signatures: Vec<Signature>) -> Self {
-        Self {
+impl LastBlockSeal {
+    fn new_regular(view: View, signatures: Vec<Signature>) -> Self {
+        LastBlockSeal::Regular {
             view,
             signatures,
         }
     }
 
+    pub fn new_first(view: View) -> Self {
+        LastBlockSeal::First {
+            view,
+        }
+    }
+
     fn seal_fields(&self) -> Vec<Bytes> {
-        vec![
-            ::rlp::encode(&*self.view).into_vec(),
-            ::rlp::encode_list(&*self.signatures).into_vec(),
-        ]
+        match self {
+            LastBlockSeal::Regular {
+                view,
+                signatures,
+            } => vec![::rlp::encode(view).into_vec(), ::rlp::encode_list(signatures).into_vec()],
+            LastBlockSeal::First {
+                view,
+            } => vec![::rlp::encode(view).into_vec(), ::rlp::EMPTY_LIST_RLP.to_vec()],
+        }
     }
 }
 
@@ -168,7 +163,8 @@ pub struct Tendermint {
     proposal_block: RwLock<Option<Bytes>>,
     /// Hash of the proposal parent block.
     proposal_parent: RwLock<H256>,
-    last_seal: RwLock<Option<RegularSeal>>,
+    //    last_seal: RwLock<Option<LastBlockSeal>>,
+    last_seal: RwLock<Vec<Signature>>,
     /// Set used to determine the current validators.
     validators: Box<ValidatorSet>,
     /// Reward per block, in base units.
@@ -198,7 +194,7 @@ impl Tendermint {
             proposal: RwLock::new(None),
             proposal_block: RwLock::new(None),
             proposal_parent: Default::default(),
-            last_seal: RwLock::new(None),
+            last_seal: RwLock::new(Vec::new()),
             validators: our_params.validators,
             block_reward: our_params.block_reward,
             extension: Arc::new(extension),
@@ -281,9 +277,19 @@ impl Tendermint {
         self.check_above_threshold(aligned_count).is_ok()
     }
 
+    fn has_enough_precommit_votes(&self, block_hash: H256) -> bool {
+        let vote_step = VoteStep::new(
+            self.height.load(AtomicOrdering::SeqCst),
+            self.view.load(AtomicOrdering::SeqCst),
+            Step::Precommit,
+        );
+        let count = self.votes.count_block_round_votes(&vote_step, &Some(block_hash));
+        self.check_above_threshold(count).is_ok()
+    }
+
     /// Broadcast all messages since last issued block to get the peers up to speed.
     fn broadcast_old_messages(&self) {
-        /// many need to propagate proposal block
+        // many need to propagate proposal block
         for m in self
             .votes
             .get_up_to(&VoteStep::new(
@@ -321,15 +327,17 @@ impl Tendermint {
         }
     }
 
-    fn save_last_seal(&self, seal: RegularSeal) {
-        *self.last_seal.write() = Some(seal);
+    fn save_last_seal(&self, seal: Vec<Signature>) {
+        *self.last_seal.write() = seal;
     }
 
     fn import_proposal_block(&self) {
         if let Some(ref weak) = *self.client.read() {
             if let Some(c) = weak.upgrade() {
-                let proposal_block = std::mem::replace(self.proposal_block.write(), None);
-                c.import_block(proposal_block);
+                let proposal_block = std::mem::replace(&mut *self.proposal_block.write(), None);
+                if let Err(e) = c.import_block(proposal_block.expect("Proposal should be set in commit phase")) {
+                    cwarn!(ENGINE, "proposal import fail {:?}", e);
+                }
             }
         }
     }
@@ -447,15 +455,15 @@ impl Tendermint {
                 }
                 Step::Precommit if self.has_enough_aligned_votes(message) => {
                     let bh = message.block_hash.expect("previous guard ensures is_some; qed");
-                    let saved_proposal_hash = self.proposal_block.read().expect("proposal_block != None when step became Prevote").hash();
+                    let saved_proposal_hash: H256 =
+                        self.proposal.read().expect("Proposal is already set in precommit phase");
                     assert_eq!(saved_proposal_hash, bh);
                     // Commit the block using a complete signature set.
                     // Generate seal and remove old votes.
                     let precommits = self.votes.round_signatures(vote_step, &bh);
                     ctrace!(ENGINE, "Collected seal: {:?}", precommits);
-                    let seal = RegularSeal::new(vote_step.view, precommits);
-//                    self.submit_seal(bh, seal.seal_fields());
-                    self.save_last_seal(seal);
+                    //                    let seal = LastBlockSeal::new_regular(vote_step.view, precommits);
+                    self.save_last_seal(precommits);
                     self.import_proposal_block();
                     self.votes.throw_out_old(&vote_step);
                     self.to_next_height(self.height.load(AtomicOrdering::SeqCst));
@@ -515,26 +523,25 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
 
         let view = self.view.load(AtomicOrdering::SeqCst);
         let bh = Some(header.bare_hash());
-        let vote_info = message_info_rlp(&VoteStep::new(height, view, Step::Propose), bh.clone());
 
-        match self.last_seal().read() {
-            Some(seal) => {
-                // Insert Propose vote.
-                cdebug!(ENGINE, "Submitting proposal {} at height {} view {}.", header.bare_hash(), height, view);
-                let sender = self.signer.read().address().expect("seals_internally already returned true");
-                self.votes.vote(ConsensusMessage::new(signature, height, view, Step::Propose, bh), sender);
-                // Remember proposal for later seal submission.
-                *self.proposal.write() = bh;
-                *self.proposal_parent.write() = header.parent_hash().clone();
-                *self.proposal_block.write() = Some(block.rlp_bytes());
-                seal
-            },
-            None => {
-                cwarn!(ENGINE, "generate_seal: FAIL: cannot found previous height's seal");
-                Seal::None
-            }
-        }
-        self.last_seal().read().unwrap_or(Seal::None)
+        let seal = &*self.last_seal.read();
+        // Insert Propose vote.
+        cdebug!(ENGINE, "Submitting proposal {} at height {} view {}.", header.bare_hash(), height, view);
+        let sender = self.signer.read().address().expect("seals_internally already returned true");
+        // Why should we vote on propose??
+        //                self.votes.vote(ConsensusMessage::new_proposal(block.header()).expect(""), sender);
+        let vote_info = message_info_rlp(&VoteStep::new(height, view, Step::Propose), bh.clone());
+        let signature = if let Ok(signature) = self.sign(blake256(&vote_info)) {
+            signature
+        } else {
+            return Seal::None
+        };
+        self.votes.vote(ConsensusMessage::new(signature, height, view, Step::Propose, bh), sender);
+        // Remember proposal for later seal submission.
+        *self.proposal.write() = bh;
+        *self.proposal_parent.write() = header.parent_hash().clone();
+        *self.proposal_block.write() = Some(block.rlp_bytes());
+        Seal::Regular(LastBlockSeal::new_regular(view, seal.clone()).seal_fields())
     }
 
     fn verify_local_seal(&self, _header: &Header) -> Result<(), Error> {
@@ -556,48 +563,52 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
     }
 
     fn verify_block_external(&self, header: &Header) -> Result<(), Error> {
-        if let Ok(proposal) = ConsensusMessage::new_proposal(header) {
-            let proposer = proposal.verify()?;
-            if !self.is_authority(&proposer) {
-                return Err(EngineError::NotAuthorized(proposer).into())
-            }
-            self.check_view_proposer(
-                header.parent_hash(),
-                proposal.vote_step.height,
-                proposal.vote_step.view,
-                &proposer,
-            )
-            .map_err(Into::into)
-        } else {
-            let vote_step = VoteStep::new(header.number() as usize, consensus_view(header)?, Step::Precommit);
-            let precommit_hash = message_hash(vote_step.clone(), header.bare_hash());
-            let ref signatures_field = header
-                .seal()
-                .get(2)
-                .expect("block went through verify_block_basic; block has .seal_fields() fields; qed");
-            let mut origins = HashSet::new();
-            for rlp in UntrustedRlp::new(signatures_field).iter() {
-                let precommit = ConsensusMessage {
-                    signature: rlp.as_val()?,
-                    block_hash: Some(header.bare_hash()),
-                    vote_step: vote_step.clone(),
-                };
-                let address = match self.votes.get(&precommit) {
-                    Some(a) => a,
-                    None => public_to_address(&recover(&precommit.signature.into(), &precommit_hash)?),
-                };
-                if !self.validators.contains(header.parent_hash(), &address) {
-                    return Err(EngineError::NotAuthorized(address.to_owned()).into())
-                }
-
-                if !origins.insert(address) {
-                    cwarn!(ENGINE, "verify_block_unordered: Duplicate signature from {} on the seal.", address);
-                    return Err(BlockError::InvalidSeal.into())
-                }
-            }
-
-            self.check_above_threshold(origins.len()).map_err(Into::into)
+        let height = header.number() as usize;
+        let view = consensus_view(header).unwrap();
+        cwarn!(ENGINE, "Verify external at {}-{}, {:?}", height, view, header);
+        //        let proposal = ConsensusMessage::new_proposal(header)?;
+        //        let proposer = proposal.verify()?;
+        let proposer = header.author();
+        if !self.is_authority(proposer) {
+            return Err(EngineError::NotAuthorized(*proposer).into())
         }
+        // view : first seal
+        // height:
+        self.check_view_proposer(header.parent_hash(), header.number() as usize, consensus_view(header)?, &proposer)
+            .map_err(Error::from)?;
+
+        // need to check it here
+        let vote_step = VoteStep::new(header.number() as usize, consensus_view(header)?, Step::Precommit);
+        let precommit_hash = message_hash(vote_step.clone(), header.bare_hash());
+        let ref signatures_field =
+            header.seal().get(1).expect("block went through verify_block_basic; block has .seal_fields() fields; qed");
+        let mut origins = HashSet::new();
+        for rlp in UntrustedRlp::new(signatures_field).iter() {
+            let precommit = ConsensusMessage {
+                signature: rlp.as_val()?,
+                // Do we need bare_hash?
+                block_hash: Some(header.bare_hash()),
+                vote_step: vote_step.clone(),
+            };
+            let address = match self.votes.get(&precommit) {
+                Some(a) => a,
+                None => public_to_address(&recover(&precommit.signature.into(), &precommit_hash)?),
+            };
+            if !self.validators.contains(header.parent_hash(), &address) {
+                return Err(EngineError::NotAuthorized(address.to_owned()).into())
+            }
+
+            if !origins.insert(address) {
+                cwarn!(ENGINE, "verify_block_unordered: Duplicate signature from {} on the seal.", address);
+                return Err(BlockError::InvalidSeal.into())
+            }
+        }
+
+        // Do we need what is the signed value?
+        if header.number() == 1 {
+            return Ok(())
+        }
+        self.check_above_threshold(origins.len()).map_err(Into::into)
     }
 
     fn signals_epoch_end(&self, header: &Header) -> EpochChange {
@@ -726,7 +737,8 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
 
     fn register_client(&self, client: Weak<EngineClient>) {
         if let Some(c) = client.upgrade() {
-            self.height.store(c.chain_info().best_block_number as usize + 1, AtomicOrdering::SeqCst);
+            let best_block_number = c.chain_info().best_block_number as usize;
+            self.height.store(best_block_number + 1, AtomicOrdering::SeqCst);
         }
         *self.client.write() = Some(client.clone());
         self.extension.register_client(client.clone());
@@ -761,27 +773,27 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
     }
 
     fn is_proposal(&self, header: &Header) -> bool {
-        match *self.step.read() {
-            Step::Commit => {
-                false
-            }
-            _ => {
-                true
-            }
+        cwarn!(ENGINE, "is proposal : {:?}", header);
+        if self.height.load(AtomicOrdering::SeqCst) > header.number() as usize {
+            return false
         }
+        !self.has_enough_precommit_votes(header.hash())
     }
 
     fn proposal_verified(&self, block: &ExecutedBlock) {
-        let proposal = ConsensusMessage::new_proposal(header)
-            .expect("block went through full verification; this Engine verifies new_proposal creation; qed");
-        let proposer = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
-        cdebug!(ENGINE, "Received a new proposal {:?} from {}.", proposal.vote_step, proposer);
-        if self.is_view(&proposal) {
-            *self.proposal.write() = proposal.block_hash.clone();
+        let header = block.header();
+        cwarn!(ENGINE, "Proposal verified : {:?}", header);
+        let proposer = header.author();
+        let height = header.number() as usize;
+        let view = consensus_view(header).unwrap();
+        cdebug!(ENGINE, "Received a new proposal {}-{} from {}.", height, view, proposer);
+
+        if self.height.load(AtomicOrdering::SeqCst) == height && self.view.load(AtomicOrdering::SeqCst) == view {
+            *self.proposal.write() = Some(header.hash());
             *self.proposal_parent.write() = header.parent_hash().clone();
             *self.proposal_block.write() = Some(block.rlp_bytes());
+            //            self.votes.vote(proposal, *proposer);
         }
-        self.votes.vote(proposal, proposer);
     }
 
     fn broadcast_proposal_block(&self, block: &IsBlock) {
@@ -813,6 +825,10 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
 
     fn register_chain_notify(&self, client: &Client) {
         client.add_notify(self.chain_notify.clone());
+    }
+
+    fn get_best_block_from_highest_score_header(&self, header: &HeaderView) -> H256 {
+        header.parent_hash()
     }
 }
 
@@ -897,7 +913,7 @@ where
         let message = header.bare_hash();
 
         let mut addresses = HashSet::new();
-        let ref header_signatures_field = header.seal().get(2).ok_or(BlockError::InvalidSeal)?;
+        let ref header_signatures_field = header.seal().get(1).ok_or(BlockError::InvalidSeal)?;
         for rlp in UntrustedRlp::new(header_signatures_field).iter() {
             let signature: Signature = rlp.as_val()?;
             let address = (self.recover)(&signature.into(), &message)?;

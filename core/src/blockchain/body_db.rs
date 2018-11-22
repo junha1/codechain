@@ -145,13 +145,16 @@ impl BodyDB {
         } else {
             return HashMap::new()
         };
-        let block = self.block_body(&block_hash).expect("New best block should be imported already");
+        let block = match best_block_changed.best_block() {
+            Some(block) => block,
+            None => return HashMap::new(),
+        };
         let parcel_hashes = block.parcel_hashes();
 
         match best_block_changed {
             BestBlockChanged::CanonChainAppended {
-                new_best_hash,
-            } => parcel_address_entries(*new_best_hash, parcel_hashes).collect(),
+                best_block,
+            } => parcel_address_entries(best_block_changed.new_best_hash().unwrap(), parcel_hashes).collect(),
             BestBlockChanged::BranchBecomingCanonChain {
                 tree_route,
                 ..
@@ -186,7 +189,10 @@ impl BodyDB {
         } else {
             return HashMap::new()
         };
-        let block = self.block_body(&block_hash).expect("New best block should be imported already");
+        let block = match best_block_changed.best_block() {
+            Some(block) => block,
+            None => return HashMap::new(),
+        };
 
         // FIXME: is the block is new best block?
         let (removed, added): (

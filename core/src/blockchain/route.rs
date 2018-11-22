@@ -16,7 +16,7 @@
 
 use primitives::H256;
 
-use super::block_info::BestBlockChanged;
+use super::block_info::{BestBlockChanged, BestHeaderChanged};
 use super::headerchain::HeaderProvider;
 
 /// Represents a tree route between `from` block and `to` block:
@@ -142,6 +142,42 @@ impl ImportRoute {
                 omitted,
             },
             BestBlockChanged::BranchBecomingCanonChain {
+                tree_route,
+                ..
+            } => {
+                enacted.extend(tree_route.enacted.iter());
+                let retracted = tree_route.retracted.clone();
+                ImportRoute {
+                    retracted,
+                    enacted,
+                    omitted,
+                }
+            }
+        }
+    }
+
+    pub fn new_from_best_hash_changed(new_block_hash: H256, best_header_changed: &BestHeaderChanged) -> Self {
+        let mut omitted = Vec::new();
+        let mut enacted = Vec::new();
+        if best_header_changed.new_best_hash() == Some(*&new_block_hash) {
+            enacted.push(new_block_hash);
+        } else {
+            omitted.push(new_block_hash);
+        }
+        match best_header_changed {
+            BestHeaderChanged::CanonChainAppended {
+                ..
+            } => ImportRoute {
+                retracted: vec![],
+                enacted,
+                omitted,
+            },
+            BestHeaderChanged::None => ImportRoute {
+                retracted: vec![],
+                enacted,
+                omitted,
+            },
+            BestHeaderChanged::BranchBecomingCanonChain {
                 tree_route,
                 ..
             } => {

@@ -17,6 +17,7 @@
 use std::option::Option;
 
 use super::route::TreeRoute;
+use crate::views::{BlockView, HeaderView};
 use primitives::H256;
 
 /// Describes how best block is changed
@@ -24,7 +25,7 @@ use primitives::H256;
 pub enum BestBlockChanged {
     /// Cannonical chain is appended.
     CanonChainAppended {
-        new_best_hash: H256,
+        best_block: Vec<u8>,
     },
     /// Nothing changed.
     None,
@@ -32,22 +33,91 @@ pub enum BestBlockChanged {
     /// because its total score is higher than current
     /// canon chain score.
     BranchBecomingCanonChain {
-        new_best_hash: H256,
+        best_block: Vec<u8>,
         tree_route: TreeRoute,
     },
 }
 
 impl BestBlockChanged {
     pub fn new_best_hash(&self) -> Option<H256> {
-        match self {
+        let block = match self {
             BestBlockChanged::CanonChainAppended {
-                new_best_hash,
-            } => Some(*new_best_hash),
+                best_block,
+            } => best_block,
             BestBlockChanged::BranchBecomingCanonChain {
-                new_best_hash,
+                best_block,
                 ..
-            } => Some(*new_best_hash),
-            BestBlockChanged::None => None,
-        }
+            } => best_block,
+            BestBlockChanged::None => return None,
+        };
+
+        let block_view = BlockView::new(block);
+        Some(block_view.header().hash())
+    }
+
+    pub fn best_block(&self) -> Option<BlockView> {
+        let block = match self {
+            BestBlockChanged::CanonChainAppended {
+                best_block,
+            } => best_block,
+            BestBlockChanged::BranchBecomingCanonChain {
+                best_block,
+                ..
+            } => best_block,
+            BestBlockChanged::None => return None,
+        };
+
+        Some(BlockView::new(block))
+    }
+}
+
+/// Describes how best block is changed
+#[derive(Debug, Clone, PartialEq)]
+pub enum BestHeaderChanged {
+    /// Cannonical chain is appended.
+    CanonChainAppended {
+        best_header: Vec<u8>,
+    },
+    /// Nothing changed.
+    None,
+    /// It's part of the fork which should become canon chain,
+    /// because its total score is higher than current
+    /// canon chain score.
+    BranchBecomingCanonChain {
+        best_header: Vec<u8>,
+        tree_route: TreeRoute,
+    },
+}
+
+impl BestHeaderChanged {
+    pub fn new_best_hash(&self) -> Option<H256> {
+        let header = match self {
+            BestHeaderChanged::CanonChainAppended {
+                best_header,
+            } => best_header,
+            BestHeaderChanged::BranchBecomingCanonChain {
+                best_header,
+                ..
+            } => best_header,
+            BestHeaderChanged::None => return None,
+        };
+
+        let header_view = HeaderView::new(header);
+        Some(header_view.hash())
+    }
+
+    pub fn header(&self) -> Option<HeaderView> {
+        let header = match self {
+            BestHeaderChanged::CanonChainAppended {
+                best_header,
+            } => best_header,
+            BestHeaderChanged::BranchBecomingCanonChain {
+                best_header,
+                ..
+            } => best_header,
+            BestHeaderChanged::None => return None,
+        };
+
+        Some(HeaderView::new(header))
     }
 }

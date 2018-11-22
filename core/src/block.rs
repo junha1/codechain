@@ -182,6 +182,7 @@ impl<'x> OpenBlock<'x> {
         self.block.header.set_author(*header.author());
         self.block.header.set_parcels_root(*header.parcels_root());
         self.block.header.set_extra_data(header.extra_data().clone());
+        self.block.header.set_seal(header.seal().to_vec());
     }
 
     /// Turn this into a `ClosedBlock`.

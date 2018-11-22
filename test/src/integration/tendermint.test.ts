@@ -50,7 +50,8 @@ describeSkippedInTravis("Tendermint ", () => {
                     "test/tendermint/password.json",
                     "--force-sealing"
                 ],
-                additionalKeysPath: "tendermint/keys"
+                additionalKeysPath: "tendermint/keys",
+                logFlag: true
             });
         });
         await Promise.all(nodes.map(node => node.start()));
@@ -71,15 +72,12 @@ describeSkippedInTravis("Tendermint ", () => {
     test(
         "Wait block generation",
         async () => {
-            await expect(
-                nodes[0].sdk.rpc.chain.getBestBlockNumber()
-            ).resolves.toBeLessThan(1);
-            await wait(30 * 1000);
+            await wait(60 * 1000);
             await expect(
                 nodes[0].sdk.rpc.chain.getBestBlockNumber()
             ).resolves.toBeGreaterThanOrEqual(1);
         },
-        60 * 1000
+        120 * 1000
     );
 
     afterEach(async () => {
