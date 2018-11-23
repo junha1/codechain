@@ -209,7 +209,7 @@ where
         name: &str,
     ) -> Result<(), IoError> {
         let (worker, stealer) = chase_lev::deque();
-        let num_workers = 4;
+        let num_workers = 1;
         let work_ready_mutex = Arc::new(SMutex::new(()));
         let work_ready = Arc::new(SCondvar::new());
 

@@ -457,17 +457,22 @@ impl Tendermint {
                     let bh = message.block_hash.expect("previous guard ensures is_some; qed");
                     let saved_proposal_hash: H256 =
                         self.proposal.read().expect("Proposal is already set in precommit phase");
-                    assert_eq!(saved_proposal_hash, bh);
-                    // Commit the block using a complete signature set.
-                    // Generate seal and remove old votes.
-                    let precommits = self.votes.round_signatures(vote_step, &bh);
-                    ctrace!(ENGINE, "Collected seal: {:?}", precommits);
-                    //                    let seal = LastBlockSeal::new_regular(vote_step.view, precommits);
-                    self.save_last_seal(precommits);
-                    self.import_proposal_block();
-                    self.votes.throw_out_old(&vote_step);
-                    self.to_next_height(self.height.load(AtomicOrdering::SeqCst));
-                    Some(Step::Commit)
+                    if saved_proposal_hash == bh {
+                        // Commit the block using a complete signature set.
+                        // Generate seal and remove old votes.
+                        let precommits = self.votes.round_signatures(vote_step, &bh);
+                        ctrace!(ENGINE, "Collected seal: {:?}", precommits);
+                        //                    let seal = LastBlockSeal::new_regular(vote_step.view, precommits);
+                        self.save_last_seal(precommits);
+                        self.import_proposal_block();
+                        self.votes.throw_out_old(&vote_step);
+                        self.to_next_height(self.height.load(AtomicOrdering::SeqCst));
+                        Some(Step::Commit)
+                    } else {
+                        cwarn!(ENGINE, "Cannot find a proposal which committed");
+                        self.increment_view(1);
+                        Some(Step::Propose)
+                    }
                 }
                 // Avoid counting votes twice.
                 Step::Prevote if lock_change => Some(Step::Precommit),
@@ -522,11 +527,17 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
         }
 
         let view = self.view.load(AtomicOrdering::SeqCst);
-        let bh = Some(header.bare_hash());
 
         let seal = &*self.last_seal.read();
+        let seal_bytes = LastBlockSeal::new_regular(view, seal.clone()).seal_fields();
+        let seal = Seal::Regular(seal_bytes.clone());
+        let bh = {
+            let mut new_header = header.clone();
+            new_header.set_seal(seal_bytes);
+            Some(new_header.hash())
+        };
         // Insert Propose vote.
-        cdebug!(ENGINE, "Submitting proposal {} at height {} view {}.", header.bare_hash(), height, view);
+        cdebug!(ENGINE, "Submitting proposal {} at height {} view {}.", header.hash(), height, view);
         let sender = self.signer.read().address().expect("seals_internally already returned true");
         // Why should we vote on propose??
         //                self.votes.vote(ConsensusMessage::new_proposal(block.header()).expect(""), sender);
@@ -541,7 +552,7 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
         *self.proposal.write() = bh;
         *self.proposal_parent.write() = header.parent_hash().clone();
         *self.proposal_block.write() = Some(block.rlp_bytes());
-        Seal::Regular(LastBlockSeal::new_regular(view, seal.clone()).seal_fields())
+        seal
     }
 
     fn verify_local_seal(&self, _header: &Header) -> Result<(), Error> {
@@ -578,8 +589,8 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
             .map_err(Error::from)?;
 
         // need to check it here
-        let vote_step = VoteStep::new(header.number() as usize, consensus_view(header)?, Step::Precommit);
-        let precommit_hash = message_hash(vote_step.clone(), header.bare_hash());
+        let vote_step = VoteStep::new((header.number() - 1) as usize, consensus_view(header)?, Step::Precommit);
+        let precommit_hash = message_hash(vote_step.clone(), *header.parent_hash());
         let ref signatures_field =
             header.seal().get(1).expect("block went through verify_block_basic; block has .seal_fields() fields; qed");
         let mut origins = HashSet::new();
@@ -587,7 +598,7 @@ impl ConsensusEngine<CodeChainMachine> for Tendermint {
             let precommit = ConsensusMessage {
                 signature: rlp.as_val()?,
                 // Do we need bare_hash?
-                block_hash: Some(header.bare_hash()),
+                block_hash: Some(header.hash()),
                 vote_step: vote_step.clone(),
             };
             let address = match self.votes.get(&precommit) {
@@ -910,7 +921,7 @@ where
     F: Fn(&Signature, &Message) -> Result<Address, Error> + Send + Sync,
 {
     fn verify_light(&self, header: &Header) -> Result<(), Error> {
-        let message = header.bare_hash();
+        let message = header.hash();
 
         let mut addresses = HashSet::new();
         let ref header_signatures_field = header.seal().get(1).ok_or(BlockError::InvalidSeal)?;
@@ -1133,7 +1144,7 @@ mod tests {
     fn proposal_seal(tap: &Arc<AccountProvider>, header: &Header, view: View) -> Vec<Bytes> {
         let author = header.author();
         let vote_info =
-            message_info_rlp(&VoteStep::new(header.number() as Height, view, Step::Propose), Some(header.bare_hash()));
+            message_info_rlp(&VoteStep::new(header.number() as Height, view, Step::Propose), Some(header.hash()));
         let signature = tap.sign(*author, None, blake256(vote_info)).unwrap();
         ProposalSeal::new(&view, &signature).seal_fields()
     }

@@ -119,7 +119,8 @@ impl Importer {
                     if self.engine.is_proposal(&block.header) {
                         self.block_queue.mark_as_good(&[header.hash()]);
                         self.engine.proposal_verified(closed_block.block());
-                        self.engine.broadcast_proposal_block(closed_block.block());
+                    // This propagate too much
+                    //                        self.engine.broadcast_proposal_block(closed_block.block());
                     } else {
                         imported_blocks.push(header.hash());
 
