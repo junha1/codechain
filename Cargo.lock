@@ -459,6 +459,7 @@ dependencies = [
  "smallvec 0.4.5",
  "tempdir",
  "time",
+ "vrf",
 ]
 
 [[package]]
