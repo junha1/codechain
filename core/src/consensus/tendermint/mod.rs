@@ -20,6 +20,7 @@ mod engine;
 mod message;
 mod network;
 mod params;
+pub mod priority_message_collector;
 pub mod types;
 pub mod vote_collector;
 mod vote_regression_checker;
@@ -35,7 +36,7 @@ use ctimer::TimerToken;
 use parking_lot::RwLock;
 
 use self::chain_notify::TendermintChainNotify;
-pub use self::message::{ConsensusMessage, VoteOn, VoteStep};
+pub use self::message::{ConsensusMessage, PriorityMessage, SortitionRound, VoteOn, VoteStep};
 pub use self::params::{TendermintParams, TimeGapParams, TimeoutParams};
 pub use self::types::{Height, Step, View};
 use super::{stake, ValidatorSet};

@@ -27,6 +27,14 @@ pub use super::super::sortition::PriorityMessage;
 use super::super::BitSet;
 use super::{Height, Step, View};
 
+/// Step for the sortition round.
+/// FIXME: It has a large overlap with the previous VoteStep.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, RlpDecodable, RlpEncodable)]
+pub struct SortitionRound {
+    pub height: Height,
+    pub view: View,
+}
+
 /// Complete step of the consensus process.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, RlpDecodable, RlpEncodable)]
 pub struct VoteStep {
@@ -70,6 +78,18 @@ impl Ord for VoteStep {
         } else {
             self.step.number().cmp(&m.step.number())
         }
+    }
+}
+
+impl PartialOrd for SortitionRound {
+    fn partial_cmp(&self, other: &SortitionRound) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SortitionRound {
+    fn cmp(&self, other: &SortitionRound) -> cmp::Ordering {
+        (self.height, self.view).cmp(&(other.height, other.view))
     }
 }
 

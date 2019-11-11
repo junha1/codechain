@@ -21,6 +21,8 @@ mod draw;
 pub mod seed;
 pub mod vrf_sortition;
 
+use std::cmp::Ordering;
+
 use ckey::Public;
 use vrf::openssl::{Error as VRFError, ECVRF};
 
@@ -28,10 +30,22 @@ pub use self::seed::{SeedInfo, VRFSeed};
 use self::vrf_sortition::{Priority, PriorityInfo, VRFSortition};
 use crate::consensus::{Height, View};
 
-#[derive(Debug, PartialEq, RlpEncodable, RlpDecodable)]
+#[derive(Clone, Debug, Eq, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct PriorityMessage {
     pub seed_info: SeedInfo,
     pub priority_info: PriorityInfo,
+}
+
+impl Ord for PriorityMessage {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.priority().cmp(&other.priority())
+    }
+}
+
+impl PartialOrd for PriorityMessage {
+    fn partial_cmp(&self, other:&Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl PriorityMessage {
