@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use ccrypto::sha256;
-use ckey::{Private, Public};
+use ckey::{standard_uncompressed_pubkey, Private, Public};
 use parking_lot::RwLock;
 use primitives::H256;
 use vrf::openssl::{Error as VrfError, ECVRF};
@@ -27,8 +27,6 @@ use vrf::VRF;
 
 use super::draw::draw;
 pub type Priority = H256;
-
-const SECP256K1_TAG_PUBKEY_UNCOMPRESSED: u8 = 0x04;
 
 pub struct VRFSortition {
     pub total_power: u64,
@@ -89,10 +87,7 @@ impl PriorityInfo {
         seed: &[u8],
         vrf_inst: Arc<RwLock<ECVRF>>,
     ) -> Result<bool, VrfError> {
-        // CodeChain is using uncompressed form of public keys without prefix, so the prefix is required
-        // for public keys to be used in openssl.
-
-        let standard_form_pubkey = [&[SECP256K1_TAG_PUBKEY_UNCOMPRESSED], &signer_public[..]].concat();
+        let standard_form_pubkey = standard_uncompressed_pubkey(signer_public);
         let verified_hash = vrf_inst.write().verify(&standard_form_pubkey, &self.vrf_proof, seed)?;
         Ok(verified_hash == self.vrf_hash)
     }
