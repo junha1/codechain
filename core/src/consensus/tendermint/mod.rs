@@ -122,7 +122,7 @@ impl Tendermint {
     }
 }
 
-const SEAL_FIELDS: usize = 4;
+const SEAL_FIELDS: usize = 5;
 
 #[cfg(test)]
 mod tests {
@@ -131,6 +131,7 @@ mod tests {
     use ctypes::{CommonParams, Header};
     use primitives::Bytes;
 
+    use super::super::sortition::SeedInfo;
     use super::super::BitSet;
     use super::message::VoteStep;
     use crate::account_provider::AccountProvider;
@@ -177,6 +178,10 @@ mod tests {
         let addr = insert_and_unlock(tap, acc);
         engine.set_signer(tap.clone(), addr);
         addr
+    }
+
+    fn create_dummy_seed_info() -> SeedInfo {
+        SeedInfo::from_fields(0, vec![0x0], vec![0x22])
     }
 
     #[test]
@@ -244,6 +249,7 @@ mod tests {
             cur_view: 0,
             precommits: vec![signature2],
             precommit_bitset: BitSet::new_with_indices(&[2]),
+            vrf_seed_info: Box::new(create_dummy_seed_info()),
         }
         .seal_fields()
         .unwrap();
@@ -283,6 +289,7 @@ mod tests {
             cur_view: 0,
             precommits: vec![signature2],
             precommit_bitset: BitSet::new_with_indices(&[2]),
+            vrf_seed_info: Box::new(create_dummy_seed_info()),
         }
         .seal_fields()
         .unwrap();
@@ -304,6 +311,7 @@ mod tests {
             cur_view: 0,
             precommits: vec![signature0, signature2, signature3],
             precommit_bitset: BitSet::new_with_indices(&[0, 2, 3]),
+            vrf_seed_info: Box::new(create_dummy_seed_info()),
         }
         .seal_fields()
         .unwrap();
@@ -319,6 +327,7 @@ mod tests {
             cur_view: 0,
             precommits: vec![signature0, signature2, bad_signature],
             precommit_bitset: BitSet::new_with_indices(&[0, 2, 3]),
+            vrf_seed_info: Box::new(create_dummy_seed_info()),
         }
         .seal_fields()
         .unwrap();

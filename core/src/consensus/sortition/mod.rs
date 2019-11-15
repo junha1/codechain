@@ -43,7 +43,7 @@ impl Ord for PriorityMessage {
 }
 
 impl PartialOrd for PriorityMessage {
-    fn partial_cmp(&self, other:&Self) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
