@@ -24,28 +24,59 @@ pub mod vrf_sortition;
 use std::sync::Arc;
 
 use ckey::Public;
-use primitives::H256;
-use vrf::openssl::Error as VrfError;
+use vrf::openssl::{Error as VRFError, ECVRF};
 
-use self::vrf_sortition::{PriorityInfo, VRFSortition};
+pub use self::seed::{SeedInfo, VRFSeed};
+use self::vrf_sortition::{Priority, PriorityInfo, VRFSortition};
+use crate::consensus::{Height, View};
 
 #[derive(Debug, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct PriorityMessage {
-    pub seed: H256,
-    pub info: PriorityInfo,
+    pub seed_info: SeedInfo,
+    pub priority_info: PriorityInfo,
 }
 
 impl PriorityMessage {
-    pub fn verify(
+    pub fn seed(&self) -> &VRFSeed {
+        self.seed_info.seed()
+    }
+
+    pub fn seed_signer_idx(&self) -> usize {
+        self.seed_info.signer_idx()
+    }
+
+    pub fn verify_seed(
+        &self,
+        height: Height,
+        view: View,
+        prev_seed: &VRFSeed,
+        signer_public: &Public,
+        vrf_inst: &mut ECVRF,
+    ) -> Result<bool, VRFError> {
+        self.seed_info.verify(height, view, prev_seed, signer_public, vrf_inst)
+    }
+
+    pub fn verify_priority(
         &self,
         signer_public: &Public,
         voting_power: u64,
         sortition_scheme: &VRFSortition,
-    ) -> Result<bool, VrfError> {
+    ) -> Result<bool, VRFError> {
         // fast verification first
-        Ok(self.info.verify_sub_user_idx(voting_power, sortition_scheme.total_power, sortition_scheme.expectation)
-            && self.info.verify_priority()
-            && self.info.verify_vrf_hash(signer_public, &self.seed, Arc::clone(&sortition_scheme.vrf_inst))?)
+        Ok(self.priority_info.verify_sub_user_idx(
+            voting_power,
+            sortition_scheme.total_power,
+            sortition_scheme.expectation,
+        ) && self.priority_info.verify_priority()
+            && self.priority_info.verify_vrf_hash(
+                signer_public,
+                self.seed(),
+                Arc::clone(&sortition_scheme.vrf_inst),
+            )?)
+    }
+
+    pub fn priority(&self) -> Priority {
+        self.priority_info.priority()
     }
 }
 
@@ -78,14 +109,14 @@ mod priority_message_tests {
         };
         let voting_power = 50;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed.into(), &signer, voting_power).unwrap().unwrap();
 
         let priority_message = PriorityMessage {
-            seed,
-            info: priority_info,
+            seed_info: SeedInfo::from_fields(0, seed.to_vec(), vec![]),
+            priority_info,
         };
-        assert!(priority_message.verify(&pub_key, voting_power, &sortition_scheme).unwrap());
-        assert!(priority_message.verify(&wrong_pub_key, voting_power, &sortition_scheme).is_err());
+        assert!(priority_message.verify_priority(&pub_key, voting_power, &sortition_scheme).unwrap());
+        assert!(priority_message.verify_priority(&wrong_pub_key, voting_power, &sortition_scheme).is_err());
     }
 
     #[test]
@@ -101,11 +132,11 @@ mod priority_message_tests {
         };
         let voting_power = 50;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed.into(), &signer, voting_power).unwrap().unwrap();
 
         let priority_message = PriorityMessage {
-            seed,
-            info: priority_info,
+            seed_info: SeedInfo::from_fields(0, seed.to_vec(), vec![]),
+            priority_info,
         };
         rlp_encode_and_decode_test!(priority_message);
     }
