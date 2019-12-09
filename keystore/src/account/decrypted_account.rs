@@ -42,9 +42,11 @@ impl DecryptedAccount {
         sign_schnorr(&Private::from(self.secret), message)
     }
 
-    ///  Generate VRF random hash output.
-    pub fn vrf_hash(&self, message: &Message, vrf_inst: &mut ECVRF) -> Result<Vec<u8>, VRFError> {
-        vrf_inst.prove(&Private::from(self.secret), message).and_then(|proof| vrf_inst.proof_to_hash(&proof))
+    ///  Generate VRF random hash output and its proof.
+    pub fn vrf_proof_and_hash(&self, message: &[u8], vrf_inst: &mut ECVRF) -> Result<(Vec<u8>, Vec<u8>), VRFError> {
+        let proof = vrf_inst.prove(&Private::from(self.secret), message)?;
+        let hash = vrf_inst.proof_to_hash(&proof)?;
+        Ok((proof, hash))
     }
 
     /// Derive public key.

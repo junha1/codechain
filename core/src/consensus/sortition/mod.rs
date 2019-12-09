@@ -51,19 +51,21 @@ impl PriorityMessage {
 #[cfg(test)]
 mod priority_message_tests {
     use ccrypto::sha256;
-    use ckey::{KeyPair, Private};
+    use ckey::KeyPair;
     use parking_lot::RwLock;
     use rlp::rlp_encode_and_decode_test;
     use vrf::openssl::{CipherSuite, ECVRF};
 
+    use super::super::signer::EngineSigner;
     use super::*;
     #[test]
     fn check_priority_message_verification() {
-        let priv_key: Private = sha256("secret_key").into();
-        let pub_key = *KeyPair::from_private(priv_key).expect("Valid private key").public();
+        let secret = sha256("secret key");
+        let signer = EngineSigner::create_engine_signer_with_secret(secret);
+        let pub_key = *KeyPair::from_private(secret.into()).expect("Valid private key").public();
 
-        let wrong_priv_key: Private = sha256("wrong_secret_key2").into();
-        let wrong_pub_key = *KeyPair::from_private(wrong_priv_key).expect("Valid private key").public();
+        let wrong_pub_key =
+            *KeyPair::from_private(sha256("wrong_secret_key2").into()).expect("Valid private key").public();
 
         let seed = sha256("seed");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
@@ -75,7 +77,7 @@ mod priority_message_tests {
         };
         let voting_power = 50;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, priv_key, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
 
         let priority_message = PriorityMessage {
             seed,
@@ -87,8 +89,7 @@ mod priority_message_tests {
 
     #[test]
     fn test_encode_and_decode_priority_message() {
-        let priv_key: Private = sha256("secret_key").into();
-
+        let signer = EngineSigner::create_engine_signer_with_secret(sha256("secret_key"));
         let seed = sha256("seed");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
         let ec_vrf = Arc::new(RwLock::new(ec_vrf));
@@ -99,7 +100,7 @@ mod priority_message_tests {
         };
         let voting_power = 50;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, priv_key, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
 
         let priority_message = PriorityMessage {
             seed,
