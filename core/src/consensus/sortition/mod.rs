@@ -18,6 +18,7 @@
 
 mod binom_cdf;
 mod draw;
+pub mod seed;
 pub mod vrf_sortition;
 
 use std::sync::Arc;

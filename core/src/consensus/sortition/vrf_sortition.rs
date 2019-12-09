@@ -22,11 +22,12 @@ use ccrypto::sha256;
 use ckey::{standard_uncompressed_pubkey, Public};
 use parking_lot::RwLock;
 use primitives::H256;
-use vrf::openssl::{Error as VrfError, ECVRF};
+use vrf::openssl::{Error as VRFError, ECVRF};
 use vrf::VRF;
 
 use super::super::signer::EngineSigner;
 use super::draw::draw;
+use super::seed::VRFSeed;
 use crate::AccountProviderError;
 
 pub type Priority = H256;
@@ -48,13 +49,12 @@ pub struct PriorityInfo {
 impl VRFSortition {
     pub fn create_highest_priority_info(
         &self,
-        seed: H256,
+        seed: VRFSeed,
         signer: &EngineSigner,
         voting_power: u64,
     ) -> Result<Option<PriorityInfo>, AccountProviderError> {
         let mut vrf_inst = self.vrf_inst.write();
         let (vrf_proof, vrf_hash) = signer.vrf_proof_and_hash(&seed, &mut vrf_inst)?;
-
         let j = draw(voting_power, self.total_power, self.expectation, &vrf_hash);
 
         Ok((0..j)
@@ -145,7 +145,8 @@ mod vrf_tests {
         let expected_priority =
             H256::from_slice(&hex::decode("ddc2ca3bd180e1af8fdec721ea863f79ad33279da2148dd58953b44420a0abca").unwrap());
         let expected_sub_user_idx = 1;
-        let actual_priority_info = sortition_scheme.create_highest_priority_info(seed, &signer, 10).unwrap().unwrap();
+        let actual_priority_info =
+            sortition_scheme.create_highest_priority_info(seed.into(), &signer, 10).unwrap().unwrap();
         assert_eq!(expected_priority, actual_priority_info.priority());
         assert_eq!(expected_sub_user_idx, actual_priority_info.sub_user_idx());
     }
@@ -161,7 +162,7 @@ mod vrf_tests {
             expectation: 1.2,
             vrf_inst: ec_vrf,
         };
-        let actual_priority_info = sortition_scheme.create_highest_priority_info(seed, &signer, 10).unwrap();
+        let actual_priority_info = sortition_scheme.create_highest_priority_info(seed.into(), &signer, 10).unwrap();
         assert!(actual_priority_info.is_none());
     }
 
@@ -184,10 +185,10 @@ mod vrf_tests {
         };
         let voting_power = 100;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed.into(), &signer, voting_power).unwrap().unwrap();
         assert!(priority_info.verify_vrf_hash(&pub_key, &seed, Arc::clone(&sortition_scheme.vrf_inst)).unwrap());
         match priority_info.verify_vrf_hash(&wrong_pub_key, &seed, Arc::clone(&sortition_scheme.vrf_inst)) {
-            Err(VrfError::InvalidProof) => (),
+            Err(VRFError::InvalidProof) => (),
             _ => panic!(),
         }
     }
@@ -205,7 +206,7 @@ mod vrf_tests {
         };
         let voting_power = 100;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed.into(), &signer, voting_power).unwrap().unwrap();
         assert!(priority_info.verify_sub_user_idx(
             voting_power,
             sortition_scheme.total_power,
@@ -227,7 +228,7 @@ mod vrf_tests {
         };
         let voting_power = 50;
         let priority_info =
-            sortition_scheme.create_highest_priority_info(seed, &signer, voting_power).unwrap().unwrap();
+            sortition_scheme.create_highest_priority_info(seed.into(), &signer, voting_power).unwrap().unwrap();
         assert!(priority_info.verify_priority());
     }
 
