@@ -21,8 +21,6 @@ mod draw;
 pub mod seed;
 pub mod vrf_sortition;
 
-use std::sync::Arc;
-
 use ckey::Public;
 use vrf::openssl::{Error as VRFError, ECVRF};
 
@@ -60,7 +58,7 @@ impl PriorityMessage {
         &self,
         signer_public: &Public,
         voting_power: u64,
-        sortition_scheme: &VRFSortition,
+        sortition_scheme: &mut VRFSortition,
     ) -> Result<bool, VRFError> {
         // fast verification first
         Ok(self.priority_info.verify_sub_user_idx(
@@ -68,11 +66,7 @@ impl PriorityMessage {
             sortition_scheme.total_power,
             sortition_scheme.expectation,
         ) && self.priority_info.verify_priority()
-            && self.priority_info.verify_vrf_hash(
-                signer_public,
-                self.seed(),
-                Arc::clone(&sortition_scheme.vrf_inst),
-            )?)
+            && self.priority_info.verify_vrf_hash(signer_public, self.seed(), &mut sortition_scheme.vrf_inst)?)
     }
 
     pub fn priority(&self) -> Priority {
@@ -84,7 +78,6 @@ impl PriorityMessage {
 mod priority_message_tests {
     use ccrypto::sha256;
     use ckey::KeyPair;
-    use parking_lot::RwLock;
     use rlp::rlp_encode_and_decode_test;
     use vrf::openssl::{CipherSuite, ECVRF};
 
@@ -101,8 +94,7 @@ mod priority_message_tests {
 
         let seed = sha256("seed");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 71.85,
             vrf_inst: ec_vrf,
@@ -115,8 +107,8 @@ mod priority_message_tests {
             seed_info: SeedInfo::from_fields(0, seed.to_vec(), vec![]),
             priority_info,
         };
-        assert!(priority_message.verify_priority(&pub_key, voting_power, &sortition_scheme).unwrap());
-        assert!(priority_message.verify_priority(&wrong_pub_key, voting_power, &sortition_scheme).is_err());
+        assert!(priority_message.verify_priority(&pub_key, voting_power, &mut sortition_scheme).unwrap());
+        assert!(priority_message.verify_priority(&wrong_pub_key, voting_power, &mut sortition_scheme).is_err());
     }
 
     #[test]
@@ -124,8 +116,7 @@ mod priority_message_tests {
         let signer = EngineSigner::create_engine_signer_with_secret(sha256("secret_key"));
         let seed = sha256("seed");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 71.85,
             vrf_inst: ec_vrf,

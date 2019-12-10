@@ -16,11 +16,8 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use ccrypto::sha256;
 use ckey::{standard_uncompressed_pubkey, Public};
-use parking_lot::RwLock;
 use primitives::H256;
 use vrf::openssl::{Error as VRFError, ECVRF};
 use vrf::VRF;
@@ -35,7 +32,7 @@ pub type Priority = H256;
 pub struct VRFSortition {
     pub total_power: u64,
     pub expectation: f64,
-    pub vrf_inst: Arc<RwLock<ECVRF>>,
+    pub vrf_inst: ECVRF,
 }
 
 #[derive(Eq, PartialEq, Debug, RlpEncodable, RlpDecodable)]
@@ -48,13 +45,12 @@ pub struct PriorityInfo {
 
 impl VRFSortition {
     pub fn create_highest_priority_info(
-        &self,
+        &mut self,
         seed: VRFSeed,
         signer: &EngineSigner,
         voting_power: u64,
     ) -> Result<Option<PriorityInfo>, AccountProviderError> {
-        let mut vrf_inst = self.vrf_inst.write();
-        let (vrf_proof, vrf_hash) = signer.vrf_proof_and_hash(&seed, &mut vrf_inst)?;
+        let (vrf_proof, vrf_hash) = signer.vrf_proof_and_hash(&seed, &mut self.vrf_inst)?;
         let j = draw(voting_power, self.total_power, self.expectation, &vrf_hash);
 
         Ok((0..j)
@@ -84,14 +80,9 @@ impl PriorityInfo {
         self.sub_user_idx
     }
 
-    pub fn verify_vrf_hash(
-        &self,
-        signer_public: &Public,
-        seed: &[u8],
-        vrf_inst: Arc<RwLock<ECVRF>>,
-    ) -> Result<bool, VrfError> {
+    pub fn verify_vrf_hash(&self, signer_public: &Public, seed: &[u8], vrf_inst: &mut ECVRF) -> Result<bool, VRFError> {
         let standard_form_pubkey = standard_uncompressed_pubkey(signer_public);
-        let verified_hash = vrf_inst.write().verify(&standard_form_pubkey, &self.vrf_proof, seed)?;
+        let verified_hash = vrf_inst.verify(&standard_form_pubkey, &self.vrf_proof, seed)?;
         Ok(verified_hash == self.vrf_hash)
     }
 
@@ -135,8 +126,7 @@ mod vrf_tests {
         let signer = EngineSigner::create_engine_signer_with_secret(sha256("secret_key"));
         let seed = sha256("seed");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 50.0,
             vrf_inst: ec_vrf,
@@ -156,8 +146,7 @@ mod vrf_tests {
         let signer = EngineSigner::create_engine_signer_with_secret(sha256("secret_key"));
         let seed = sha256("seed");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 1.2,
             vrf_inst: ec_vrf,
@@ -177,8 +166,7 @@ mod vrf_tests {
         // sha256("seed2")
         let seed = sha256("seed2");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 60.7,
             vrf_inst: ec_vrf,
@@ -186,8 +174,8 @@ mod vrf_tests {
         let voting_power = 100;
         let priority_info =
             sortition_scheme.create_highest_priority_info(seed.into(), &signer, voting_power).unwrap().unwrap();
-        assert!(priority_info.verify_vrf_hash(&pub_key, &seed, Arc::clone(&sortition_scheme.vrf_inst)).unwrap());
-        match priority_info.verify_vrf_hash(&wrong_pub_key, &seed, Arc::clone(&sortition_scheme.vrf_inst)) {
+        assert!(priority_info.verify_vrf_hash(&pub_key, &seed, &mut sortition_scheme.vrf_inst).unwrap());
+        match priority_info.verify_vrf_hash(&wrong_pub_key, &seed, &mut sortition_scheme.vrf_inst) {
             Err(VRFError::InvalidProof) => (),
             _ => panic!(),
         }
@@ -198,8 +186,7 @@ mod vrf_tests {
         let signer = EngineSigner::create_engine_signer_with_secret(sha256("secret_key3"));
         let seed = sha256("seed3");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 60.7,
             vrf_inst: ec_vrf,
@@ -220,8 +207,7 @@ mod vrf_tests {
         let signer = EngineSigner::create_engine_signer_with_secret(sha256("secret_key4"));
         let seed = sha256("seed4");
         let ec_vrf = ECVRF::from_suite(CipherSuite::SECP256K1_SHA256_SVDW).unwrap();
-        let ec_vrf = Arc::new(RwLock::new(ec_vrf));
-        let sortition_scheme = VRFSortition {
+        let mut sortition_scheme = VRFSortition {
             total_power: 100,
             expectation: 41.85,
             vrf_inst: ec_vrf,
