@@ -72,6 +72,9 @@ import CodeChain from "../helper/spawn";
     const baseSeq = await nodes[0].sdk.rpc.chain.getSeq(faucetAddress);
 
     for (let i = 0; i < numTransactions; i++) {
+        if (i % 100 == 0) {
+            console.log(`${i}`);
+        }
         const value = makeRandomH256();
         const accountId = nodes[0].sdk.util.getAccountIdFromPrivate(value);
         const recipient = nodes[0].sdk.core.classes.PlatformAddress.fromAccountId(
@@ -96,6 +99,10 @@ import CodeChain from "../helper/spawn";
     }
     const startTime = new Date();
     console.log(`Start at: ${startTime}`);
+
+    const bn_start = await nodes[0].sdk.rpc.chain.getBestBlockNumber();
+    console.log(`BLOCK_START: ${bn_start}`);
+
     await nodes[0].sdk.rpc.chain.sendSignedTransaction(transactions[0]);
 
     while (true) {
@@ -125,7 +132,17 @@ import CodeChain from "../helper/spawn";
     console.log(
         `Elapsed time (ms): ${endTime.getTime() - startTime.getTime()}`
     );
+
+    const bn_end = await nodes[0].sdk.rpc.chain.getBestBlockNumber();
+    console.log(`BLOCK: ${bn_end}`);
+    
+    for (let i = 0; i <= bn_end; i++) {
+        const block = await nodes[0].sdk.rpc.chain.getBlock(i);
+        console.log(`BLOCK${i} : ${block?.transactions.length}`);
+    }
+
     console.log(`TPS: ${tps}`);
+    
 
     await Promise.all(nodes.map(node => node.clean()));
 })().catch(console.error);
